@@ -7,39 +7,23 @@
     <script src="https://aka.ms/csspeech/jsbrowserpackageraw"></script>
     <style>
         body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-        .chat-container { background-color: #f0f0f0; padding: 20px; border-radius: 10px; }
-        .chat-header { background-color: #007bff; color: white; padding: 10px; border-radius: 5px 5px 0 0; }
-        .chat-history { height: 300px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; background-color: white; }
-        .controls { margin-top: 10px; }
-        #debugInfo { margin-top: 20px; padding: 10px; background-color: #f8f8f8; border: 1px solid #ddd; font-family: monospace; }
-        #connectionStatus { margin-top: 10px; font-weight: bold; }
-        .connected { color: green; }
-        .disconnected { color: red; }
+        #chatHistory { height: 300px; border: 1px solid #ddd; overflow-y: auto; padding: 10px; margin-bottom: 20px; }
+        #debugInfo { height: 100px; border: 1px solid #ddd; overflow-y: auto; padding: 10px; font-size: 12px; }
     </style>
 </head>
 <body>
-    <div class="chat-container">
-        <div class="chat-header">
-            <h1>AI Assistant Chat</h1>
-        </div>
-        <div id="chatHistory" class="chat-history"></div>
-        <div class="controls">
-            <button id="startButton">Start Listening</button>
-            <button id="stopButton" disabled>Stop Listening</button>
-            <button id="reconnectButton">Reconnect WebSocket</button>
-        </div>
-        <div id="connectionStatus" class="disconnected">Disconnected</div>
-    </div>
+    <h1>AI Assistant Chat</h1>
+    <div id="chatHistory"></div>
+    <button id="startButton">Start Listening</button>
+    <button id="stopButton" disabled>Stop Listening</button>
     <div id="debugInfo"></div>
 
     <script>
         const subscriptionKey = "3249fb4e6d8248569b42d5dbf693c259";
         const serviceRegion = "eastus";
-        const wsUrl = "wss://de72-2406-5900-1085-d42a-e515-6f90-ff18-2564.ngrok-free.app";
+        const wsUrl = "wss:////e72f-2406-5900-1085-d42a-f8e9-61d1-20cd-fd65.ngrok-free.app";  // Update this with your ngrok URL
 
-        let recognizer;
-        let synthesizer;
-        let ws;
+        let recognizer, synthesizer, ws;
 
         function log(message) {
             console.log(message);
@@ -48,118 +32,52 @@
             debugInfo.scrollTop = debugInfo.scrollHeight;
         }
 
-        function updateConnectionStatus(connected) {
-            const statusElement = document.getElementById('connectionStatus');
-            if (connected) {
-                statusElement.textContent = 'Connected';
-                statusElement.className = 'connected';
-            } else {
-                statusElement.textContent = 'Disconnected';
-                statusElement.className = 'disconnected';
-            }
-        }
+        document.getElementById('startButton').addEventListener('click', startListening);
+        document.getElementById('stopButton').addEventListener('click', stopListening);
 
-        function connectWebSocket() {
-            log(`Attempting to connect to WebSocket at ${wsUrl}`);
+        function startListening() {
+            const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(subscriptionKey, serviceRegion);
+            const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
+            recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+            synthesizer = new SpeechSDK.SpeechSynthesizer(speechConfig);
+
+            recognizer.recognized = (s, e) => {
+                if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
+                    const transcription = e.result.text;
+                    log(`Recognized: ${transcription}`);
+                    addMessageToChat('You', transcription);
+                    sendTranscriptionToServer(transcription);
+                }
+            };
+
+            recognizer.startContinuousRecognitionAsync();
+            document.getElementById('startButton').disabled = true;
+            document.getElementById('stopButton').disabled = false;
+
             ws = new WebSocket(wsUrl);
-            
-            ws.onopen = () => {
-                log("WebSocket connected successfully");
-                updateConnectionStatus(true);
-            };
-            
-            ws.onclose = (event) => {
-                log(`WebSocket connection closed: ${event.code} ${event.reason}`);
-                log(`Was clean? ${event.wasClean}`);
-                updateConnectionStatus(false);
-            };
-            
-            ws.onerror = (error) => {
-                log(`WebSocket error: ${JSON.stringify(error)}`);
-            };
-            
+            ws.onopen = () => log("WebSocket connected");
             ws.onmessage = (event) => {
-                log(`Received message from server: ${event.data}`);
-                try {
-                    const response = JSON.parse(event.data);
-                    if (response.type === 'llm_response') {
-                        addMessageToChat('AI', response.data);
-                        speakResponse(response.data);
-                    }
-                } catch (e) {
-                    log(`Error parsing server message: ${e}`);
+                const response = JSON.parse(event.data);
+                if (response.type === 'llm_response') {
+                    addMessageToChat('AI', response.data);
+                    speakResponse(response.data);
                 }
             };
         }
 
-        document.getElementById('startButton').addEventListener('click', startListening);
-        document.getElementById('stopButton').addEventListener('click', stopListening);
-        document.getElementById('reconnectButton').addEventListener('click', connectWebSocket);
-
-        function startListening() {
-            try {
-                const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(subscriptionKey, serviceRegion);
-                const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
-                recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
-                synthesizer = new SpeechSDK.SpeechSynthesizer(speechConfig);
-
-                log("Speech recognizer and synthesizer initialized");
-
-                recognizer.recognizing = (s, e) => {
-                    log(`Recognizing: ${e.result.text}`);
-                };
-
-                recognizer.recognized = (s, e) => {
-                    if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
-                        const transcription = e.result.text;
-                        log(`Recognized: ${transcription}`);
-                        addMessageToChat('You', transcription);
-                        sendTranscriptionToServer(transcription);
-                    }
-                };
-
-                recognizer.canceled = (s, e) => {
-                    log(`Canceled: ${e.reason}`);
-                    stopListening();
-                };
-
-                recognizer.sessionStopped = (s, e) => {
-                    log("Session stopped");
-                    stopListening();
-                };
-
-                recognizer.startContinuousRecognitionAsync();
-                document.getElementById('startButton').disabled = true;
-                document.getElementById('stopButton').disabled = false;
-
-                connectWebSocket();
-            } catch (error) {
-                log(`Error in startListening: ${error}`);
-            }
-        }
-
         function stopListening() {
             if (recognizer) {
-                recognizer.stopContinuousRecognitionAsync(() => {
-                    recognizer.close();
-                    recognizer = undefined;
-                    log("Recognition stopped");
-                });
+                recognizer.stopContinuousRecognitionAsync();
+                recognizer = undefined;
             }
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.close();
-            }
+            if (ws) ws.close();
             document.getElementById('startButton').disabled = false;
             document.getElementById('stopButton').disabled = true;
         }
 
         function sendTranscriptionToServer(transcription) {
             if (ws && ws.readyState === WebSocket.OPEN) {
-                const message = JSON.stringify({ type: 'transcription', data: transcription });
-                log(`Sending to server: ${message}`);
-                ws.send(message);
-            } else {
-                log("WebSocket is not open. Cannot send message.");
+                ws.send(JSON.stringify({ type: 'transcription', data: transcription }));
             }
         }
 
@@ -170,19 +88,13 @@
         }
 
         function speakResponse(text) {
-            log(`Synthesizing speech for: ${text}`);
-            synthesizer.speakTextAsync(
-                text,
+            synthesizer.speakTextAsync(text, 
                 result => {
                     if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
-                        log("Speech synthesized successfully");
-                    } else {
-                        log(`Speech synthesis canceled, ${result.errorDetails}`);
+                        log("Speech synthesized");
                     }
                 },
-                error => {
-                    log(`Error synthesizing speech: ${error}`);
-                }
+                error => log(`Error synthesizing speech: ${error}`)
             );
         }
     </script>
