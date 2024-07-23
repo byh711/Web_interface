@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Assistant Chat</title>
+    <script src="https://aka.ms/csspeech/jsbrowserpackageraw"></script>
+    <style>
+        /* ... (keep the existing styles) ... */
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>AI Assistant Chat</h1>
+        </div>
+        <div id="chatHistory" class="chat-history"></div>
+        <div class="controls">
+            <button id="startButton">Start Listening</button>
+            <button id="stopButton" disabled>Stop Listening</button>
+        </div>
+    </div>
+    <div id="debugInfo"></div>
+
+    <script>
+        const subscriptionKey = "3249fb4e6d8248569b42d5dbf693c259";
+        const serviceRegion = "eastus";
+        const wsUrl = "ws://220.65.175.5:8765";
+
+        let audioConfig;
+        let speechConfig;
+        let recognizer;
+        let synthesizer;
+        let ws;
+
+        function log(message) {
+            console.log(message);
+            const debugInfo = document.getElementById('debugInfo');
+            debugInfo.innerHTML += message + '<br>';
+            debugInfo.scrollTop = debugInfo.scrollHeight;
+        }
+
+        document.getElementById('startButton').addEventListener('click', startListening);
+        document.getElementById('stopButton').addEventListener('click', stopListening);
+
+        function startListening() {
+            try {
+                speechConfig = SpeechSDK.SpeechConfig.fromSubscription(subscriptionKey, serviceRegion);
+                audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
+                recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+                synthesizer = new SpeechSDK.SpeechSynthesizer(speechConfig);
+
+                log("Speech recognizer and synthesizer initialized");
+
+                recognizer.recognizing = (s, e) => {
+                    log(`Recognizing: ${e.result.text}`);
+                };
+
+                recognizer.recognized = (s, e) => {
+                    if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
+                        const transcription = e.result.text;
+                        log(`Recognized: ${transcription}`);
+                        addMessageToChat('user', transcription);
+                        sendTranscriptionToServer(transcription);
+                    }
+                };
+
+                recognizer.canceled = (s, e) => {
+                    log(`Canceled: ${e.reason}`);
+                    stopListening();
+                };
+
+                recognizer.sessionStopped = (s, e) => {
+                    log("Session stopped");
+                    stopListening();
+                };
+
+                recognizer.startContinuousRecognitionAsync();
+                document.getElementById('startButton').disabled = true;
+                document.getElementById('stopButton').disabled = false;
+
+                // Connect to WebSocket server
+                connectWebSocket();
+            } catch (error) {
+                log(`Error in startListening: ${error}`);
+            }
+        }
+
+        function connectWebSocket() {
+            ws = new WebSocket(wsUrl);
+            ws.onopen = () => {
+                log("WebSocket connection opened");
+            };
+            ws.onclose = (event) => {
+                log(`WebSocket connection closed: ${event.code} ${event.reason}`);
+                setTimeout(connectWebSocket, 5000);  // Try to reconnect after 5 seconds
+            };
+            ws.onerror = (error) => {
+                log(`WebSocket error: ${error}`);
+            };
+            ws.onmessage = (event) => {
+                log(`Received message from server: ${event.data}`);
+                try {
+                    const response = JSON.parse(event.data);
+                    if (response.type === 'llm_response') {
+                        addMessageToChat('assistant', response.data);
+                        speakResponse(response.data);
+                    }
+                } catch (error) {
+                    log(`Error parsing server message: ${error}`);
+                }
+            };
+        }
+
+        function stopListening() {
+            if (recognizer) {
+                recognizer.stopContinuousRecognitionAsync(() => {
+                    recognizer.close();
+                    recognizer = undefined;
+                    log("Recognition stopped");
+                });
+            }
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
+            document.getElementById('startButton').disabled = false;
+            document.getElementById('stopButton').disabled = true;
+        }
+
+        function sendTranscriptionToServer(transcription) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const message = JSON.stringify({ type: 'transcription', data: transcription });
+                log(`Sending to server: ${message}`);
+                ws.send(message);
+            } else {
+                log("WebSocket is not open. Cannot send message.");
+            }
+        }
+
+        function addMessageToChat(sender, message) {
+            const chatHistory = document.getElementById('chatHistory');
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', sender === 'user' ? 'user-message' : 'assistant-message');
+            messageElement.textContent = message;
+            chatHistory.appendChild(messageElement);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+
+        function speakResponse(text) {
+            log(`Synthesizing speech for: ${text}`);
+            synthesizer.speakTextAsync(
+                text,
+                result => {
+                    if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
+                        log("Speech synthesized successfully");
+                    } else {
+                        log(`Speech synthesis canceled, ${result.errorDetails}`);
+                    }
+                },
+                error => {
+                    log(`Error synthesizing speech: ${error}`);
+                });
+        }
+    </script>
+</body>
+</html>
