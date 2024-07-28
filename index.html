@@ -50,7 +50,7 @@
 
     <script>
         // This will be populated by the server
-        const config = ${CONFIG_JSON};
+        const config = JSON.parse('${CONFIG_JSON}');
         
         let socket;
         let recognition;
