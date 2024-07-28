@@ -4,151 +4,99 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Assistant Chat</title>
+    <script src="https://aka.ms/csspeech/jsbrowserpackageraw"></script>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        #chatHistory {
-            border: 1px solid #ccc;
-            height: 400px;
-            overflow-y: auto;
-            margin-bottom: 20px;
-            padding: 10px;
-        }
-        .user-message {
-            background-color: #e6f3ff;
-            padding: 5px 10px;
-            margin: 5px 0;
-            border-radius: 5px;
-        }
-        .assistant-message {
-            background-color: #f0f0f0;
-            padding: 5px 10px;
-            margin: 5px 0;
-            border-radius: 5px;
-        }
-        button {
-            padding: 10px 20px;
-            margin-right: 10px;
-        }
-        #debugInfo {
-            margin-top: 20px;
-            font-size: 0.8em;
-            color: #666;
-        }
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        #chatHistory { height: 300px; border: 1px solid #ddd; overflow-y: auto; padding: 10px; margin-bottom: 20px; }
+        #debugInfo { height: 100px; border: 1px solid #ddd; overflow-y: auto; padding: 10px; font-size: 12px; }
     </style>
 </head>
 <body>
     <h1>AI Assistant Chat</h1>
     <div id="chatHistory"></div>
-    <button id="startListening">Start Listening</button>
-    <button id="stopListening">Stop Listening</button>
+    <button id="startButton">Start Listening</button>
+    <button id="stopButton" disabled>Stop Listening</button>
     <div id="debugInfo"></div>
 
     <script>
-        // This will be populated by the server
-        const config = window.serverConfig;
-        
-        let socket;
-        let recognition;
+        const subscriptionKey = "3249fb4e6d8248569b42d5dbf693c259";
+        const serviceRegion = "eastus";
+        const wsUrl = "wss://6d40-2406-5900-1085-d42a-e515-6f90-ff18-2564.ngrok-free.app";
 
-        function connectWebSocket() {
-            socket = new WebSocket(config.wsUrl);
+        let recognizer, synthesizer, ws;
 
-            socket.onopen = function(event) {
-                updateDebugInfo("WebSocket connection established");
-            };
+        function log(message) {
+            console.log(message);
+            const debugInfo = document.getElementById('debugInfo');
+            debugInfo.innerHTML += message + '<br>';
+            debugInfo.scrollTop = debugInfo.scrollHeight;
+        }
 
-            socket.onmessage = function(event) {
-                const response = JSON.parse(event.data);
-                if (response.type === 'llm_response') {
-                    displayMessage(response.data, 'assistant');
-                    speakResponse(response.data);
+        document.getElementById('startButton').addEventListener('click', startListening);
+        document.getElementById('stopButton').addEventListener('click', stopListening);
+
+        function startListening() {
+            const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(subscriptionKey, serviceRegion);
+            const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
+            recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+            synthesizer = new SpeechSDK.SpeechSynthesizer(speechConfig);
+
+            recognizer.recognized = (s, e) => {
+                if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
+                    const transcription = e.result.text;
+                    log(`Recognized: ${transcription}`);
+                    addMessageToChat('You', transcription);
+                    sendTranscriptionToServer(transcription);
                 }
             };
 
-            socket.onclose = function(event) {
-                updateDebugInfo("WebSocket connection closed. Attempting to reconnect...");
-                setTimeout(connectWebSocket, 3000);
+            recognizer.startContinuousRecognitionAsync();
+            document.getElementById('startButton').disabled = true;
+            document.getElementById('stopButton').disabled = false;
+
+            ws = new WebSocket(wsUrl);
+            ws.onopen = () => log("WebSocket connected");
+            ws.onmessage = (event) => {
+                const response = JSON.parse(event.data);
+                if (response.type === 'llm_response') {
+                    addMessageToChat('AI', response.data);
+                    speakResponse(response.data);
+                }
             };
-
-            socket.onerror = function(error) {
-                updateDebugInfo(`WebSocket error: ${error.message}`);
-            };
-        }
-
-        function startListening() {
-            if (!('webkitSpeechRecognition' in window)) {
-                alert("Speech recognition is not supported in your browser.");
-                return;
-            }
-
-            recognition = new webkitSpeechRecognition();
-            recognition.continuous = false;
-            recognition.interimResults = false;
-            recognition.lang = 'en-US';
-
-            recognition.onresult = function(event) {
-                const transcript = event.results[0][0].transcript;
-                displayMessage(transcript, 'user');
-                sendTranscriptionToServer(transcript);
-            };
-
-            recognition.onerror = function(event) {
-                updateDebugInfo(`Speech recognition error: ${event.error}`);
-            };
-
-            recognition.start();
-            updateDebugInfo("Listening...");
         }
 
         function stopListening() {
-            if (recognition) {
-                recognition.stop();
-                updateDebugInfo("Stopped listening");
+            if (recognizer) {
+                recognizer.stopContinuousRecognitionAsync();
+                recognizer = undefined;
+            }
+            if (ws) ws.close();
+            document.getElementById('startButton').disabled = false;
+            document.getElementById('stopButton').disabled = true;
+        }
+
+        function sendTranscriptionToServer(transcription) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'transcription', data: transcription }));
             }
         }
 
-        function sendTranscriptionToServer(transcript) {
-            if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({
-                    type: 'transcription',
-                    data: transcript
-                }));
-            } else {
-                updateDebugInfo("WebSocket is not open. Reconnecting...");
-                connectWebSocket();
-            }
-        }
-
-        function displayMessage(message, sender) {
+        function addMessageToChat(sender, message) {
             const chatHistory = document.getElementById('chatHistory');
-            const messageElement = document.createElement('div');
-            messageElement.textContent = message;
-            messageElement.className = sender === 'user' ? 'user-message' : 'assistant-message';
-            chatHistory.appendChild(messageElement);
+            chatHistory.innerHTML += `<p><strong>${sender}:</strong> ${message}</p>`;
             chatHistory.scrollTop = chatHistory.scrollHeight;
         }
 
         function speakResponse(text) {
-            const utterance = new SpeechSynthesisUtterance(text);
-            speechSynthesis.speak(utterance);
+            synthesizer.speakTextAsync(text, 
+                result => {
+                    if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
+                        log("Speech synthesized");
+                    }
+                },
+                error => log(`Error synthesizing speech: ${error}`)
+            );
         }
-
-        function updateDebugInfo(message) {
-            const debugInfo = document.getElementById('debugInfo');
-            debugInfo.textContent = message;
-        }
-
-        // Event listeners
-        document.getElementById('startListening').addEventListener('click', startListening);
-        document.getElementById('stopListening').addEventListener('click', stopListening);
-
-        // Initial connection
-        connectWebSocket();
     </script>
 </body>
 </html>
