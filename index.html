@@ -122,8 +122,14 @@
 
         function startListening() {
             const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(subscriptionKey, serviceRegion);
+            speechConfig.speechRecognitionLanguage = "ko-KR"; // Set language to Korean
+            speechConfig.speechSynthesisLanguage = "ko-KR"; // Set synthesis language to Korean
+
             const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
+            
+            // Create the SpeechRecognizer without specifying the language here
             recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+            
             synthesizer = new SpeechSDK.SpeechSynthesizer(speechConfig);
 
             recognizer.recognized = (s, e) => {
