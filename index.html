@@ -94,10 +94,16 @@
         #stopButton:hover {
             background-color: #da190b;
         }
+        .intermediate-message {
+            text-align: center;
+            font-style: italic;
+            color: #666;
+            margin: 10px 0;
+        }
     </style>
 </head>
 <body>
-    <h1>AI Assistant Chat</h1>
+    <h1>POSCODX AI CHAT</h1>
     <div id="chatHistory"></div>
     <button id="startButton">Start Listening</button>
     <button id="stopButton" disabled>Stop Listening</button>
@@ -122,14 +128,13 @@
 
         function startListening() {
             const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(subscriptionKey, serviceRegion);
-            speechConfig.speechRecognitionLanguage = "ko-KR"; // Set language to Korean
-            speechConfig.speechSynthesisLanguage = "ko-KR"; // Set synthesis language to Korean
+            speechConfig.speechRecognitionLanguage = "ko-KR";
+            speechConfig.speechSynthesisLanguage = "ko-KR";
+            speechConfig.speechSynthesisVoiceName = "ko-KR-SunHiNeural";
 
             const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
             
-            // Create the SpeechRecognizer without specifying the language here
             recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
-            
             synthesizer = new SpeechSDK.SpeechSynthesizer(speechConfig);
 
             recognizer.recognized = (s, e) => {
@@ -149,7 +154,10 @@
             ws.onopen = () => log("WebSocket connected");
             ws.onmessage = (event) => {
                 const response = JSON.parse(event.data);
-                if (response.type === 'llm_response') {
+                if (response.type === 'intermediate') {
+                    addIntermediateMessage(response.data);
+                } else if (response.type === 'llm_response') {
+                    removeIntermediateMessage();
                     addMessageToChat('AI', response.data);
                     speakResponse(response.data);
                 }
@@ -181,11 +189,31 @@
             chatHistory.scrollTop = chatHistory.scrollHeight;
         }
 
+        function addIntermediateMessage(message) {
+            const chatHistory = document.getElementById('chatHistory');
+            const messageElement = document.createElement('p');
+            messageElement.className = 'intermediate-message';
+            messageElement.textContent = message;
+            messageElement.id = 'intermediateMessage';
+            chatHistory.appendChild(messageElement);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+
+        function removeIntermediateMessage() {
+            const intermediateMessage = document.getElementById('intermediateMessage');
+            if (intermediateMessage) {
+                intermediateMessage.remove();
+            }
+        }
+
         function speakResponse(text) {
+            log("Attempting to speak: " + text);
             synthesizer.speakTextAsync(text, 
                 result => {
                     if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
                         log("Speech synthesized");
+                    } else {
+                        log("Speech synthesis failed: " + result.reason);
                     }
                 },
                 error => log(`Error synthesizing speech: ${error}`)
